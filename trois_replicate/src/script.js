@@ -3,21 +3,15 @@ import SimplexNoise from 'simplex-noise';
 import { SubsurfaceScatteringShader } from "three/examples/jsm/shaders/SubsurfaceScatteringShader";
 import { EffectComposer, RenderPass, EffectPass, GodRaysEffect, BloomEffect, SMAAEffect, SMAAImageLoader } from "postprocessing";
 
-import './style.css'
-
-// Features
-// TODO: Allow to change color
-// TODO: Add notification that you can click anywhere for tubes to start trail, for fullscreen, for color change
-// TODO: Request fullscreen (on all devices)
-// TODO: Add music (and toggle volume buttons)
+import './style.css';
 
 // Improvements
+// TODO: Fix initial loading glitch
 // TODO: Check if it is Safari and even don't show full screen feature
 // TODO: Try to add shadows
 
 // Bugs
 // TODO: When fps is bigger animation is faster
-// TODO: Fix artifact on border for god rays
 
 // Optimisation
 // TODO: Optimise camera frustum
@@ -109,7 +103,7 @@ const computeCurl = (x, y, z) => {
 /**
  * Global config
  */
-const COLOR = randColor();
+const COLOR = new THREE.Color(1, 0.5, 0);
 const ROUNDED_TUBES_COUNT = 100;
 
 let IS_TRAIL_MODE = false;
@@ -130,7 +124,7 @@ const sizes = {
 const renderer = new THREE.WebGLRenderer({
     canvas,
     powerPreference: "high-performance", // prefer better GPU if available
-    antialias: false,
+    antialias: true,
     stencil: false,
     depth: false
 })
@@ -141,7 +135,107 @@ renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
 const composer = new EffectComposer(renderer, {
     multisampling: renderer.capabilities.isWebGL2
 });
-// Events
+
+/**
+ * Event listeners
+ */
+// Helpers
+const checkIfMobileDevice = () => {
+    return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)
+}
+
+let clickTimer = null;
+const doubleTapEventHandlerWrapper = (cb) => {
+    if (clickTimer === null) {
+        clickTimer = setTimeout(() => { clickTimer = null }, 300);
+    } else {
+        clearTimeout(clickTimer);
+        clickTimer = null;
+        cb();
+    }
+}
+
+const toggleTrailMode = (newState) => {
+    IS_TRAIL_MODE = newState;
+    pointLight.visible = newState;
+    sun.visible = newState;
+}
+
+const handleColorChange = () => {
+    const newColor = randColor();
+
+    // Update rounded tubes color
+    roundedTubeMaterial.uniforms.diffuse.value = newColor;
+    roundedTubeMaterial.needsUpdate = true;
+
+    // Update lights
+    pointLight.color.set(newColor);
+    pointLightBackground.color.set(newColor);
+
+    // Update postprocessing
+    sun.material.color = newColor;
+    sun.material.needsUpdate = true;
+}
+
+const handleToggleFullscreen = () => {
+    if (!window.document.fullscreenElement) {
+        window.document.documentElement.requestFullscreen();
+    } else {
+        if (window.document.exitFullscreen) {
+            window.document.exitFullscreen();
+        }
+    }
+}
+
+const notifications = checkIfMobileDevice()
+    ? [{
+        text: 'Touch and move around the screen',
+        width: 264
+    }, {
+        text: 'To change color double tap',
+        width: 264
+    }]
+    : [{
+        text: 'To toggle full screen mode press "f"',
+        width: 315
+    }, {
+        text: 'Click and hold to create a light',
+        width: 284
+    },{
+        text: 'While holding move light around the screen',
+        width: 372
+    }, {
+        text: 'To change color press "c"',
+        width: 244
+    }];
+
+const notificationElement = document.createElement('div');
+notificationElement.classList.add('notification');
+document.body.appendChild(notificationElement);
+
+let currentStep = 0;
+
+const showNotificationStep = () => {
+    const notificationConfig = notifications[currentStep];
+    notificationElement.innerText = notificationConfig.text;
+    notificationElement.style.width = `${notificationConfig.width}px`;
+}
+const finishNotificationStep = (stepIndex) => {
+    if (currentStep === stepIndex) {
+        if (stepIndex === notifications.length - 1) {
+            notificationElement.remove();
+        } else {
+            currentStep++;
+            showNotificationStep();
+        }
+    }
+}
+
+
+showNotificationStep();
+
+
+/* Resize */
 window.addEventListener('resize', () => {
     // Update sizes
     sizes.width = window.innerWidth
@@ -159,27 +253,58 @@ window.addEventListener('resize', () => {
     composer.setSize(sizes.width, sizes.height)
 })
 
-window.addEventListener('click', () => {
-    IS_TRAIL_MODE = !IS_TRAIL_MODE;
+/* Toggle trail mode */
+// Mobile
+window.addEventListener('touchmove', () => {
+    toggleTrailMode(true);
+    finishNotificationStep(0);
+})
+window.addEventListener('touchend', () => toggleTrailMode(false))
+window.addEventListener('touchcancel', () => toggleTrailMode(false))
 
-    if (IS_TRAIL_MODE) {
-        pointLight.visible = true;
-        sun.visible = true;
-    } else {
-        pointLight.visible = false;
-        sun.visible = false;
+// Desktop
+let isHolding = false;
+window.addEventListener('mousedown', () => {
+    toggleTrailMode(true);
+    finishNotificationStep(1);
+    isHolding = true;
+})
+window.addEventListener('mousemove', () => {
+    if(isHolding) {
+        setTimeout(() => finishNotificationStep(2), 1000);
+    }
+})
+window.addEventListener('mouseup', () => {
+    toggleTrailMode(false);
+    isHolding = false;
+    if (currentStep === 2) {
+        currentStep = 1;
+        showNotificationStep();
     }
 })
 
-window.addEventListener("keypress", function(e) {
-    if (e.keyCode === 13) { // Enter
-        if (!window.document.fullscreenElement) {
-            window.document.documentElement.requestFullscreen();
-        } else {
-            if (window.document.exitFullscreen) {
-                window.document.exitFullscreen();
-            }
-        }
+/* Color change */
+// Mobile
+window.addEventListener('touchstart', () => {
+    doubleTapEventHandlerWrapper(() => {
+        handleColorChange();
+        finishNotificationStep(1);
+    })
+})
+
+// Desktop
+window.addEventListener("keypress", (e) => {
+    if (e.key === 'c') {
+        handleColorChange();
+        finishNotificationStep(3);
+    }
+}, false);
+
+/* Full screen */
+window.addEventListener("keypress", (e) => {
+    if (e.key === 'f') {
+        handleToggleFullscreen();
+        finishNotificationStep(0);
     }
 }, false);
 
@@ -362,7 +487,7 @@ const roundedTubes = initRoundedTubes();
 /**
  * Camera
  */
-const camera = new THREE.PerspectiveCamera(75, sizes.width / sizes.height, 0.1, 100)
+const camera = new THREE.PerspectiveCamera(90, sizes.width / sizes.height, 0.1, 100)
 camera.position.set(0, 0, 4)
 scene.add(camera)
 
@@ -432,19 +557,19 @@ const godRaysPassParams = {
 }
 composer.addPass(new EffectPass(camera, new GodRaysEffect(camera, sun, godRaysPassParams)));
 
-const bloomPassParams = {
-    luminanceThreshold : 0.2,
-    luminanceSmoothing : 0.1,
-    intensity : 1.5
-};
-composer.addPass(new EffectPass(camera, new BloomEffect(bloomPassParams)));
-
 if (!renderer.capabilities.isWebGL2) {
     const smaaImageLoader = new SMAAImageLoader(new THREE.LoadingManager());
     smaaImageLoader.load((ssmaaPassParams) => {
         composer.addPass(new EffectPass(camera, new SMAAEffect(...ssmaaPassParams)));
     });
 }
+
+const bloomPassParams = {
+    luminanceThreshold : 0.2,
+    luminanceSmoothing : 0.1,
+    intensity : 1.5
+};
+composer.addPass(new EffectPass(camera, new BloomEffect(bloomPassParams)));
 
 /**
  * Animate
@@ -460,7 +585,8 @@ const tick = () => {
 
         sun.position.x = cursor.x;
         sun.position.y = cursor.y;
-        sun.position.z = 0;
+        sun.position.z = -0.1;
+
         sun.updateMatrix();
     }
 
