@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import Stats from 'stats.js';
 import SimplexNoise from 'simplex-noise';
 import { SubsurfaceScatteringShader } from "three/examples/jsm/shaders/SubsurfaceScatteringShader";
 import { EffectComposer, RenderPass, EffectPass, GodRaysEffect, BloomEffect, SMAAEffect, SMAAImageLoader } from "postprocessing";
@@ -6,19 +7,14 @@ import { EffectComposer, RenderPass, EffectPass, GodRaysEffect, BloomEffect, SMA
 import './style.css';
 
 // Improvements
-// TODO: Fix initial loading glitch
-// TODO: Check if it is Safari and even don't show full screen feature
-// TODO: Try to add shadows
-
-// Bugs
 // TODO: When fps is bigger animation is faster
+// TODO: Use three native effect composer (mb it will fix bug on borders)
 
 // Optimisation
 // TODO: Optimise camera frustum
 // TODO: Geometries with same segments count can be reused
 // TODO: Instanced mesh can be used
 // TODO: GPGPU can be used
-// TODO: Maybe bg light is not required and we can toggle its' state depending on IS_TRAIL_MODE
 
 /* Helpers */
 // Random float from <-range/2, range/2> interval
@@ -145,13 +141,20 @@ const checkIfMobileDevice = () => {
 }
 
 let clickTimer = null;
-const doubleTapEventHandlerWrapper = (cb) => {
+const doubleTapEventHandlerWrapper = (doubleTapCb, singleTapCb) => {
     if (clickTimer === null) {
-        clickTimer = setTimeout(() => { clickTimer = null }, 300);
+        clickTimer = setTimeout(() => {
+            clickTimer = null
+            if (singleTapCb) {
+                singleTapCb()
+            }
+        }, 300);
     } else {
         clearTimeout(clickTimer);
         clickTimer = null;
-        cb();
+        if (doubleTapCb) {
+            doubleTapCb();
+        }
     }
 }
 
@@ -189,8 +192,11 @@ const handleToggleFullscreen = () => {
 
 const notifications = checkIfMobileDevice()
     ? [{
-        text: 'Touch and move around the screen',
-        width: 264
+        text: 'Touch the screen to create a light',
+        width: 320
+    }, {
+        text: 'While holding move light around the screen',
+        width: 372
     }, {
         text: 'To change color double tap',
         width: 264
@@ -255,9 +261,21 @@ window.addEventListener('resize', () => {
 
 /* Toggle trail mode */
 // Mobile
+window.addEventListener('touchstart', () => {
+    doubleTapEventHandlerWrapper(
+        () => {
+            handleColorChange();
+            finishNotificationStep(2);
+        },
+        () => {
+            toggleTrailMode(true);
+            finishNotificationStep(0);
+        }
+    )
+})
 window.addEventListener('touchmove', () => {
     toggleTrailMode(true);
-    finishNotificationStep(0);
+    setTimeout(() => finishNotificationStep(1), 1000);
 })
 window.addEventListener('touchend', () => toggleTrailMode(false))
 window.addEventListener('touchcancel', () => toggleTrailMode(false))
@@ -283,28 +301,16 @@ window.addEventListener('mouseup', () => {
     }
 })
 
-/* Color change */
 // Mobile
-window.addEventListener('touchstart', () => {
-    doubleTapEventHandlerWrapper(() => {
-        handleColorChange();
-        finishNotificationStep(1);
-    })
-})
-
-// Desktop
-window.addEventListener("keypress", (e) => {
-    if (e.key === 'c') {
-        handleColorChange();
-        finishNotificationStep(3);
-    }
-}, false);
-
 /* Full screen */
 window.addEventListener("keypress", (e) => {
     if (e.key === 'f') {
         handleToggleFullscreen();
         finishNotificationStep(0);
+    }
+    if (e.key === 'c') {
+        handleColorChange();
+        finishNotificationStep(3);
     }
 }, false);
 
@@ -357,21 +363,33 @@ class RoundedTubeMesh {
             false
         );
         this.mesh = new THREE.Mesh(this.geometry, this.material);
+        this.mesh.frustumCulled = false;
 
         // For round ends of tube
         const sphereGeometry = new THREE.SphereGeometry(this.radius, 16, 16);
+
         this.sphereFirst = new THREE.Mesh(sphereGeometry, this.material);
+        this.sphereFirst.position.copy(this.points[0])
+        this.sphereFirst.frustumCulled = false;
+
         this.sphereLast = new THREE.Mesh(sphereGeometry, this.material);
+        this.sphereLast.position.copy(this.points[points.length - 1]);
+        this.sphereLast.frustumCulled = false;
 
         this.meshesGroup = new THREE.Object3D();
         this.meshesGroup.add(this.mesh);
         this.meshesGroup.add(this.sphereFirst);
         this.meshesGroup.add(this.sphereLast);
     }
-    animate(target) {
+    animate(target, deltaTime) {
         for (let i = this.points.length - 1; i > 0; i--) { // Set for each point previous point position 1 --> 0
             this.points[i].copy(this.points[i - 1]);
         }
+
+        // Make speed independent of fps
+        const delta = deltaTime * 60;
+        const attraction = this.attraction * delta;
+        const vlimit = this.vlimit * delta;
 
         // Calculate velocity
         let velocity;
@@ -383,9 +401,9 @@ class RoundedTubeMesh {
         }
         velocity.length()
         velocity.normalize(); // Get only direction
-        velocity.multiplyScalar(this.attraction) // Add strength
+        velocity.multiplyScalar(attraction) // Add strength
         this.velocity.add(velocity);
-        this.velocity.clampScalar(-this.vlimit, this.vlimit);
+        this.velocity.clampScalar(-vlimit, vlimit);
         this.points[0].add(this.velocity);
 
         this.update();
@@ -467,7 +485,7 @@ const initRoundedTubes = () => {
             points.push(new THREE.Vector3(
                 randomPoint.x,
                 randomPoint.y,
-                randomPoint.z - 2 * i // Add all point for tube along z axis
+                randomPoint.z - 0.05 * i // Add all point for tube along z axis
             ));
         }
 
@@ -532,9 +550,8 @@ document.addEventListener('mousemove', pointerMove);
 /**
  * Lights
  */
-const pointLightBackground = new THREE.PointLight(COLOR, 0.4)
-pointLightBackground.position.set(0, 0, -10)
-scene.add(pointLightBackground);
+const ambientLight = new THREE.AmbientLight(COLOR, 0.25)
+scene.add(ambientLight);
 
 const pointLight = new THREE.PointLight(COLOR, 0.8)
 pointLight.visible = IS_TRAIL_MODE; // Only once on start
@@ -577,7 +594,12 @@ composer.addPass(new EffectPass(camera, new BloomEffect(bloomPassParams)));
 const clock = new THREE.Clock();
 clock.start();
 
+const stats = new Stats();
+stats.showPanel(0);
+document.body.appendChild( stats.dom );
+
 const tick = () => {
+    stats.begin();
     // Lights
     if (IS_TRAIL_MODE) {
         pointLight.position.x = cursor.x;
@@ -591,13 +613,15 @@ const tick = () => {
     }
 
     // Tubes
+    const deltaTime = clock.getDelta();
     roundedTubes.forEach(tube => {
-        tube.animate(cursor);
+        tube.animate(cursor, deltaTime);
     })
 
     // Render
     composer.render();
 
+    stats.end();
     // Call tick again on the next frame
     window.requestAnimationFrame(tick)
 }

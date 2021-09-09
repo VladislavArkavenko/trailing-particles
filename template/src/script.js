@@ -1,8 +1,6 @@
 import './style.css'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
-import SimplexNoise from 'simplex-noise';
-const simplex = new SimplexNoise(Math.random);
 
 /**
  * Base
@@ -32,8 +30,11 @@ const material = new THREE.ShaderMaterial({
         
         void main()
         {   
-            vec4 worldPosition = modelMatrix * vec4(position, 1.0);
-            gl_Position = projectionMatrix * viewMatrix * worldPosition;
+            vec4 modelPosition = modelMatrix * vec4(position, 1.0);
+            vec4 modelViewPosition = viewMatrix * modelPosition;
+            
+            gl_PointSize = 100. * ( 1. / - modelViewPosition.z );
+            gl_Position = projectionMatrix * modelViewPosition;
             
             vUv = uv;
             vNormal = normal;
@@ -42,6 +43,8 @@ const material = new THREE.ShaderMaterial({
         }
     `,
     fragmentShader: `
+        #define PI 3.1415926538
+    
         uniform float uTime;
     
         varying vec2 vUv;
