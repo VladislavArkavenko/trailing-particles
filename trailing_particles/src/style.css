@@ -38,7 +38,8 @@ body
     left: 0;
     right: 0;
     background: rgba(255, 255, 255, 0.15);
-    border: 2px solid rgb(255, 136, 0);
+    border: 2px solid;
+    border-color: rgb(255, 136, 0);
     border-radius: 32px;
     color: rgb(255, 136, 0);
     font-family: 'Urbanist', sans-serif;

@@ -7,8 +7,7 @@ import { EffectComposer, RenderPass, EffectPass, GodRaysEffect, BloomEffect, SMA
 import './style.css';
 
 // Improvements
-// TODO: When fps is bigger animation is faster
-// TODO: Use three native effect composer (mb it will fix bug on borders)
+// TODO: Recalculation of points array for tubes is fps dependent
 
 // Optimisation
 // TODO: Optimise camera frustum
@@ -120,7 +119,7 @@ const sizes = {
 const renderer = new THREE.WebGLRenderer({
     canvas,
     powerPreference: "high-performance", // prefer better GPU if available
-    antialias: true,
+    antialias: false,
     stencil: false,
     depth: false
 })
@@ -133,13 +132,68 @@ const composer = new EffectComposer(renderer, {
 });
 
 /**
- * Event listeners
+ * Notification system
  */
-// Helpers
 const checkIfMobileDevice = () => {
     return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)
 }
 
+const notifications = checkIfMobileDevice()
+    ? [{
+        text: 'Touch the screen to create a light',
+        width: 320
+    }, {
+        text: 'While holding move light around the screen',
+        width: 372
+    }, {
+        text: 'To change color double tap',
+        width: 264
+    }]
+    : [{
+        text: 'To toggle full screen mode press "f"',
+        width: 315
+    }, {
+        text: 'Click and hold to create a light',
+        width: 284
+    }, {
+        text: 'While holding move light around the screen',
+        width: 372
+    }, {
+        text: 'To change color press "c"',
+        width: 244
+    }];
+
+const notificationElement = document.createElement('div');
+notificationElement.classList.add('notification');
+document.body.appendChild(notificationElement);
+
+let currentStepIndex;
+
+const showNotificationStep = (stepIndex) => {
+    currentStepIndex = stepIndex
+
+    const notificationConfig = notifications[stepIndex];
+    notificationElement.innerText = notificationConfig.text;
+    notificationElement.style.width = `${notificationConfig.width}px`;
+}
+const finishNotificationStep = (stepIndex) => {
+    if (currentStepIndex === stepIndex) {
+        if (stepIndex === notifications.length - 1) {
+            notificationElement.remove();
+        } else {
+            showNotificationStep(currentStepIndex + 1);
+        }
+    }
+}
+const checkIfCurrentNotification = (stepIndex) => stepIndex === currentStepIndex;
+
+// Init notification flow
+showNotificationStep(0);
+
+/**
+ * Event listeners
+ */
+// Helpers
 let clickTimer = null;
 const doubleTapEventHandlerWrapper = (doubleTapCb, singleTapCb) => {
     if (clickTimer === null) {
@@ -173,11 +227,18 @@ const handleColorChange = () => {
 
     // Update lights
     pointLight.color.set(newColor);
-    pointLightBackground.color.set(newColor);
+    ambientLight.color.set(newColor);
 
     // Update postprocessing
     sun.material.color = newColor;
     sun.material.needsUpdate = true;
+
+    // Update notification
+    if(notificationElement) {
+        const cssColor = `rgb(${newColor.r * 255}, ${newColor.g * 255}, ${newColor.b * 255})`;
+        notificationElement.style.borderColor = cssColor;
+        notificationElement.style.color = cssColor;
+    }
 }
 
 const handleToggleFullscreen = () => {
@@ -189,57 +250,6 @@ const handleToggleFullscreen = () => {
         }
     }
 }
-
-const notifications = checkIfMobileDevice()
-    ? [{
-        text: 'Touch the screen to create a light',
-        width: 320
-    }, {
-        text: 'While holding move light around the screen',
-        width: 372
-    }, {
-        text: 'To change color double tap',
-        width: 264
-    }]
-    : [{
-        text: 'To toggle full screen mode press "f"',
-        width: 315
-    }, {
-        text: 'Click and hold to create a light',
-        width: 284
-    },{
-        text: 'While holding move light around the screen',
-        width: 372
-    }, {
-        text: 'To change color press "c"',
-        width: 244
-    }];
-
-const notificationElement = document.createElement('div');
-notificationElement.classList.add('notification');
-document.body.appendChild(notificationElement);
-
-let currentStep = 0;
-
-const showNotificationStep = () => {
-    const notificationConfig = notifications[currentStep];
-    notificationElement.innerText = notificationConfig.text;
-    notificationElement.style.width = `${notificationConfig.width}px`;
-}
-const finishNotificationStep = (stepIndex) => {
-    if (currentStep === stepIndex) {
-        if (stepIndex === notifications.length - 1) {
-            notificationElement.remove();
-        } else {
-            currentStep++;
-            showNotificationStep();
-        }
-    }
-}
-
-
-showNotificationStep();
-
 
 /* Resize */
 window.addEventListener('resize', () => {
@@ -281,23 +291,23 @@ window.addEventListener('touchend', () => toggleTrailMode(false))
 window.addEventListener('touchcancel', () => toggleTrailMode(false))
 
 // Desktop
-let isHolding = false;
+let isMouseHolding = false;
 window.addEventListener('mousedown', () => {
     toggleTrailMode(true);
     finishNotificationStep(1);
-    isHolding = true;
+    isMouseHolding = true;
 })
 window.addEventListener('mousemove', () => {
-    if(isHolding) {
+    if (isMouseHolding) {
         setTimeout(() => finishNotificationStep(2), 1000);
     }
 })
 window.addEventListener('mouseup', () => {
     toggleTrailMode(false);
-    isHolding = false;
-    if (currentStep === 2) {
-        currentStep = 1;
-        showNotificationStep();
+    isMouseHolding = false;
+
+    if (checkIfCurrentNotification(2)) {
+        showNotificationStep(1);
     }
 })
 
@@ -382,14 +392,14 @@ class RoundedTubeMesh {
         this.meshesGroup.add(this.sphereLast);
     }
     animate(target, deltaTime) {
-        for (let i = this.points.length - 1; i > 0; i--) { // Set for each point previous point position 1 --> 0
-            this.points[i].copy(this.points[i - 1]);
-        }
-
         // Make speed independent of fps
         const delta = deltaTime * 60;
         const attraction = this.attraction * delta;
         const vlimit = this.vlimit * delta;
+
+        for (let i = this.points.length - 1; i > 0; i--) { // Set for each point previous point position 1 --> 0
+            this.points[i].copy(this.points[i - 1]);
+        }
 
         // Calculate velocity
         let velocity;
@@ -550,7 +560,7 @@ document.addEventListener('mousemove', pointerMove);
 /**
  * Lights
  */
-const ambientLight = new THREE.AmbientLight(COLOR, 0.25)
+const ambientLight = new THREE.AmbientLight(COLOR, 0.15)
 scene.add(ambientLight);
 
 const pointLight = new THREE.PointLight(COLOR, 0.8)
@@ -568,9 +578,9 @@ const sun = new THREE.Mesh(
 )
 sun.visible = IS_TRAIL_MODE; // Only once on start
 const godRaysPassParams = {
-    density : 1.5,
-    decay : 0.98,
-    weight : .1
+    density : 0.96,
+    decay : 0.95,
+    weight : 1.1,
 }
 composer.addPass(new EffectPass(camera, new GodRaysEffect(camera, sun, godRaysPassParams)));
 
@@ -594,12 +604,7 @@ composer.addPass(new EffectPass(camera, new BloomEffect(bloomPassParams)));
 const clock = new THREE.Clock();
 clock.start();
 
-const stats = new Stats();
-stats.showPanel(0);
-document.body.appendChild( stats.dom );
-
 const tick = () => {
-    stats.begin();
     // Lights
     if (IS_TRAIL_MODE) {
         pointLight.position.x = cursor.x;
@@ -607,7 +612,6 @@ const tick = () => {
 
         sun.position.x = cursor.x;
         sun.position.y = cursor.y;
-        sun.position.z = -0.1;
 
         sun.updateMatrix();
     }
@@ -621,7 +625,6 @@ const tick = () => {
     // Render
     composer.render();
 
-    stats.end();
     // Call tick again on the next frame
     window.requestAnimationFrame(tick)
 }
